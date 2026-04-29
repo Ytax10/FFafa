@@ -1,0 +1,19 @@
+import discord
+import os
+
+token = os.environ.get("MTQ5OTEwNjAxODA3NDgyNDgzNw.GxK89n.2uMMzOGMBhxuOeOVaSRMMhnV_V2v5plwL3N1os")
+app_id = os.environ.get("1499106018074824837") # <-- ЗАМЕНИТЕ НА ВАШ APP ID
+
+bot = discord.Client(intents=discord.Intents.default())
+
+@bot.event
+async def on_ready():
+    print(f'Бот {bot.user} готов!')
+    await bot.change_presence(activity=discord.Activity(
+        type=discord.ActivityType.watching, # Игра будет отображаться как "Смотрит"
+        name="Запуск игры",
+        application_id=app_id,
+        details="Присоединяйтесь к игре!"
+    ))
+
+bot.run(token)

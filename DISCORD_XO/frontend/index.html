@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Крестики-Нолики</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; background-color: #f0f0f0; }
+        #board { display: inline-grid; grid-template-columns: repeat(3, 100px); gap: 5px; }
+        .cell { width: 100px; height: 100px; background: #fff; border: 1px solid #333; font-size: 40px; cursor: pointer; }
+        #status { margin: 20px; font-size: 1.2em; }
+    </style>
+</head>
+<body>
+    <h1>Крестики-Нолики</h1>
+    <div id="status">Ожидание игроков...</div>
+    <div id="board">
+        <div class="cell" data-index="0"></div>
+        <div class="cell" data-index="1"></div>
+        <div class="cell" data-index="2"></div>
+        <div class="cell" data-index="3"></div>
+        <div class="cell" data-index="4"></div>
+        <div class="cell" data-index="5"></div>
+        <div class="cell" data-index="6"></div>
+        <div class="cell" data-index="7"></div>
+        <div class="cell" data-index="8"></div>
+    </div>
+    <script type="module">
+        import { DiscordSDK } from 'https://cdn.jsdelivr.net/npm/@discord/embedded-app-sdk@1.5.0/+esm';
+
+        const discordSdk = new DiscordSDK('YOUR_DISCORD_CLIENT_ID'); // <-- ЗАМЕНИТЕ НА ВАШ КЛИЕНТСКИЙ ID
+
+        async function setup() {
+            await discordSdk.ready();
+            const { code } = await discordSdk.commands.authorize({
+                client_id: 'YOUR_DISCORD_CLIENT_ID', // <-- ЗАМЕНИТЕ НА ВАШ КЛИЕНТСКИЙ ID
+                response_type: 'code',
+                state: '',
+                prompt: 'none',
+                scope: ['identify', 'connections'],
+            });
+
+            const response = await fetch('/api/token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code }),
+            });
+            const { access_token } = await response.json();
+            await discordSdk.commands.authenticate({ access_token });
+
+            // Логика игры после авторизации
+            console.log('Авторизация прошла успешно!');
+            document.getElementById('status').innerText = 'Игра началась!';
+        }
+
+        setup();
+    </script>
+</body>
+</html>
