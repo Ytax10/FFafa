@@ -1,114 +1,101 @@
+import asyncio
+import json
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-import json
-import asyncio
 from game import Game
 
 app = FastAPI()
 
-# Хранилище игр
-games = {}
-# Очередь (user_id, websocket)
-waiting = []
-# Соответствие user_id -> websocket
-connections = {}
-game_id_counter = 0
+# Хранилища
+games: dict[int, Game] = {}
+queue = []                     # пары (user_id, websocket)
+connections: dict[str, WebSocket] = {}
+next_game_id = 1
 
-app.mount("/static", StaticFiles(directory="../static", html=True), name="static")
+# Монтируем папку static так, чтобы index.html отдавался по корню
+app.mount("/", StaticFiles(directory="../static", html=True), name="static")
 
 @app.websocket("/ws")
-async def ws_handler(websocket: WebSocket):
-    global game_id_counter
+async def ws_endpoint(websocket: WebSocket):
+    global next_game_id
     await websocket.accept()
-    data = await websocket.receive_json()
-    user_id = data.get("user_id")
-    if not user_id:
+    try:
+        data = await websocket.receive_json()
+        user_id = data.get("user_id")
+    except:
         await websocket.close()
         return
 
     connections[user_id] = websocket
 
-    if waiting:
-        opp_id, opp_ws = waiting.pop(0)
-        game_id_counter += 1
-        game = Game(opp_id, user_id, game_id_counter)
-        games[game_id_counter] = game
-        # Сообщаем обоим
+    if queue:
+        opp_id, opp_ws = queue.pop(0)
+        game_id = next_game_id
+        next_game_id += 1
+        game = Game(opp_id, user_id, game_id)
+        games[game_id] = game
+
         await opp_ws.send_json({
-            "type": "start",
-            "game_id": game_id_counter,
-            "your_turn": True,
-            "piece": game.piece_of[opp_id],
-            "state": game.to_dict()
+            "type": "start", "your_turn": True,
+            "piece": game.piece_of[opp_id], "state": game.state_dict()
         })
         await websocket.send_json({
-            "type": "start",
-            "game_id": game_id_counter,
-            "your_turn": False,
-            "piece": game.piece_of[user_id],
-            "state": game.to_dict()
+            "type": "start", "your_turn": False,
+            "piece": game.piece_of[user_id], "state": game.state_dict()
         })
-        # Запускаем обработчики
-        asyncio.create_task(player_loop(opp_ws, opp_id, game_id_counter))
-        asyncio.create_task(player_loop(websocket, user_id, game_id_counter))
+
+        asyncio.create_task(player_loop(opp_ws, opp_id, game_id))
+        asyncio.create_task(player_loop(websocket, user_id, game_id))
     else:
-        waiting.append((user_id, websocket))
+        queue.append((user_id, websocket))
         await websocket.send_json({"type": "waiting"})
 
-async def player_loop(ws: WebSocket, user_id: int, game_id: int):
+async def player_loop(ws: WebSocket, user_id: str, game_id: int):
     try:
         while True:
             msg = await ws.receive_json()
-            if "coord" not in msg:
+            coord = msg.get("coord")
+            if not coord:
                 continue
-            coord = msg["coord"]
             game = games.get(game_id)
             if not game:
                 await ws.send_json({"type": "error", "message": "Игра не найдена"})
                 continue
             try:
-                game.place_piece(user_id, coord)
+                game.place(user_id, coord)
             except ValueError as e:
                 await ws.send_json({"type": "error", "message": str(e)})
                 continue
-            # Отправляем обновление всем
-            state = game.to_dict()
+
+            state = game.state_dict()
             for pid in game.players:
                 if pid in connections:
-                    await connections[pid].send_json({
-                        "type": "update",
-                        "state": state,
-                        "last_move": {"player": user_id, "coord": coord}
-                    })
+                    await connections[pid].send_json({"type": "update", "state": state})
+
             if game.winner:
-                # Финальное сообщение
+                await asyncio.sleep(0.3)
                 for pid in game.players:
                     if pid in connections:
                         await connections[pid].send_json({
-                            "type": "gameover",
-                            "winner": game.winner,
-                            "state": state
+                            "type": "gameover", "winner": game.winner, "state": state
                         })
-                asyncio.create_task(remove_game(game_id))
+                asyncio.create_task(cleanup_game(game_id))
+                break
     except WebSocketDisconnect:
-        # Игрок вышел
         game = games.get(game_id)
         if game:
-            other = next(p for p in game.players if p != user_id)
-            if other in connections:
+            other = next((p for p in game.players if p != user_id), None)
+            if other and other in connections:
                 await connections[other].send_json({"type": "opponent_left"})
-            games.pop(game_id, None)
-            for p in game.players:
-                connections.pop(p, None)
+        games.pop(game_id, None)
+        for p in (game.players if game else []):
+            connections.pop(p, None)
+        global queue
+        queue = [(uid, w) for uid, w in queue if uid != user_id]
 
-async def remove_game(gid):
+async def cleanup_game(game_id):
     await asyncio.sleep(60)
-    game = games.pop(gid, None)
+    game = games.pop(game_id, None)
     if game:
         for p in game.players:
             connections.pop(p, None)
-
-# Для Railway health-check
-@app.get("/")
-async def root():
-    return {"status": "ok"}

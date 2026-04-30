@@ -4,98 +4,67 @@
     <meta charset="UTF-8">
     <title>Тетрадь</title>
     <style>
-        body { font-family: sans-serif; display: flex; justify-content: center; background: #f0f5f9; }
-        #game { margin-top: 20px; text-align: center; }
-        .board { display: grid; grid-template-columns: repeat(8, 60px); gap: 2px; margin: 10px auto; }
-        .cell { width: 60px; height: 60px; border: 1px solid #4a90e2; display: flex; align-items: center; justify-content: center; font-size: 36px; cursor: pointer; background: white; }
-        .cell.disabled { cursor: default; opacity: 0.6; }
-        #info { margin: 10px; font-size: 1.2em; }
-        .piece-indicator { font-size: 24px; }
+        body { font-family: sans-serif; display: flex; justify-content: center; background: #e6f0fa; margin: 0; padding-top: 30px; }
+        #game { text-align: center; }
+        .board { display: grid; grid-template-columns: repeat(8, 55px); gap: 2px; margin: 15px auto; }
+        .cell { width: 55px; height: 55px; border: 1px solid #a0c0f0; display: flex; align-items: center; justify-content: center; font-size: 32px; background: white; cursor: pointer; }
+        .cell.disabled { opacity: 0.6; cursor: default; }
+        #myPiece { font-size: 40px; }
+        #turnIndicator { font-size: 1.1em; margin: 10px; }
     </style>
 </head>
 <body>
 <div id="game">
-    <div id="info">Ожидание соперника...</div>
-    <div>Ваша фигура: <span id="myPiece" class="piece-indicator"></span></div>
+    <div id="info">Подключение...</div>
+    <div>Ваша фигура: <span id="myPiece"></span></div>
     <div id="turnIndicator"></div>
     <div class="board" id="board"></div>
 </div>
 
 <script>
-    // Подключаем Discord SDK (нужно заменить CLIENT_ID)
-    const CLIENT_ID = '1499106018074824837'; // <-- !!! ВАШ КЛИЕНТСКИЙ ID !!!
+    const CLIENT_ID = '1499106018074824837'; // <-- замените!
 
-    const { DiscordSDK } = window.DiscordSDK || {};
-    let auth;
+    let userId, ws, myPiece, gameState;
 
     async function init() {
-        if (DiscordSDK) {
-            auth = await DiscordSDK.commands.authorize({
-                client_id: CLIENT_ID,
-                response_type: 'token',
-                state: '',
-                prompt: 'none',
-                scope: ['identify', 'connections']
-            });
-            console.log('Auth success', auth.user);
-            // Получаем userId
-            const userId = auth.user.id;
-            // Запускаем игру
-            startGame(userId);
-        } else {
-            alert('Discord SDK не загружен');
-        }
+        const { DiscordSDK } = window;
+        if (!DiscordSDK) { alert('SDK не загружен'); return; }
+        const auth = await DiscordSDK.commands.authorize({
+            client_id: CLIENT_ID,
+            response_type: 'token',
+            prompt: 'none',
+            scope: ['identify']
+        });
+        userId = auth.user.id;
+        document.getElementById('info').innerText = 'Подключение к серверу...';
+        connectWebSocket();
     }
 
-    let ws;
-    let myUserId;
-    let myPiece;
-    let boardState = [];
-    let currentTurn;
-    let gameId;
-
-    async function startGame(userId) {
-        myUserId = userId;
+    function connectWebSocket() {
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${location.host}/ws`;
-        ws = new WebSocket(wsUrl);
-        ws.onopen = () => {
-            ws.send(JSON.stringify({ user_id: userId }));
-        };
-        ws.onmessage = (event) => {
-            const msg = JSON.parse(event.data);
-            handleMessage(msg);
-        };
+        ws = new WebSocket(`${protocol}//${location.host}/ws`);
+        ws.onopen = () => ws.send(JSON.stringify({ user_id: userId }));
+        ws.onmessage = e => handleMessage(JSON.parse(e.data));
+        ws.onclose = () => document.getElementById('info').innerText = 'Соединение потеряно';
     }
 
     function handleMessage(msg) {
         switch(msg.type) {
             case 'waiting':
-                document.getElementById('info').innerText = 'Ожидаем соперника...';
+                document.getElementById('info').innerText = 'Ожидание соперника...';
                 break;
             case 'start':
-                gameId = msg.game_id;
                 myPiece = msg.piece;
                 document.getElementById('myPiece').innerText = myPiece;
-                updateBoard(msg.state);
-                if (msg.your_turn) {
-                    document.getElementById('turnIndicator').innerText = 'Ваш ход';
-                } else {
-                    document.getElementById('turnIndicator').innerText = 'Ход соперника';
-                }
+                updateUI(msg.state);
                 document.getElementById('info').innerText = 'Игра началась!';
                 break;
             case 'update':
-                updateBoard(msg.state);
-                if (msg.state.turn === myUserId) {
-                    document.getElementById('turnIndicator').innerText = 'Ваш ход';
-                } else {
-                    document.getElementById('turnIndicator').innerText = 'Ход соперника';
-                }
+                updateUI(msg.state);
                 break;
             case 'gameover':
-                updateBoard(msg.state);
-                document.getElementById('info').innerText = `Победитель: <@${msg.winner}>`;
+                updateUI(msg.state);
+                document.getElementById('info').innerHTML = `Победитель: <strong>${msg.winner}</strong>`;
                 document.getElementById('turnIndicator').innerText = '';
                 break;
             case 'opponent_left':
@@ -107,34 +76,36 @@
         }
     }
 
-    function updateBoard(state) {
-        boardState = state.board;
-        currentTurn = state.turn;
-        const boardDiv = document.getElementById('board');
-        boardDiv.innerHTML = '';
+    function updateUI(state) {
+        gameState = state;
+        const board = document.getElementById('board');
+        board.innerHTML = '';
         for (let i = 0; i < 8; i++) {
             for (let j = 0; j < 8; j++) {
                 const idx = i * 8 + j;
                 const cell = document.createElement('div');
                 cell.className = 'cell';
-                cell.textContent = boardState[idx];
-                // Если игра не окончена и сейчас ход этого пользователя, разрешаем клик
-                if (state.winner === null && state.turn === myUserId && boardState[idx] === '⬜') {
-                    cell.onclick = () => makeMove(i, j);
+                cell.textContent = state.board[idx];
+                const isMyTurn = state.turn === userId && !state.winner;
+                const isEmpty = state.board[idx] === '⬜';
+                if (isMyTurn && isEmpty) {
+                    cell.onclick = () => {
+                        const coord = String.fromCharCode(65 + j) + (i + 1);
+                        ws.send(JSON.stringify({ coord }));
+                    };
                 } else {
                     cell.classList.add('disabled');
                 }
-                boardDiv.appendChild(cell);
+                board.appendChild(cell);
             }
         }
-    }
-
-    function makeMove(row, col) {
-        const colLetter = String.fromCharCode('A'.charCodeAt(0) + col);
-        const coord = colLetter + (row + 1);
-        ws.send(JSON.stringify({ coord: coord }));
+        if (!state.winner) {
+            document.getElementById('turnIndicator').innerText =
+                state.turn === userId ? 'Ваш ход' : 'Ход соперника';
+        }
     }
 
     init();
 </script>
+</body>
 </html>
